@@ -1,0 +1,47 @@
+# =============================================================================
+# Terraform plan/validate for the pipeline's own infrastructure (OIDC
+# provider, IAM roles, ECR repo). Separate from ci-cd.yml since infra
+# changes here are rare and reviewed differently than app deploys.
+# =============================================================================
+name: terraform-plan
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.6"
+
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive terraform/
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GHA_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform plan
+        working-directory: terraform
+        run: terraform plan -no-color
