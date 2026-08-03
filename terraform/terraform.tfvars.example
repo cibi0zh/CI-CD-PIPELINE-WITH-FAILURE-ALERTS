@@ -1,0 +1,14 @@
+aws_region           = "us-east-1"
+project_name         = "cicd-pipeline"
+ecr_repository_name  = "cicd-pipeline/healthcheck"
+
+# ARN of the EKS cluster from the platform repo, e.g.:
+# arn:aws:eks:us-east-1:123456789012:cluster/enterprise-cloud-platform-dev
+eks_cluster_arn = "arn:aws:eks:us-east-1:<ACCOUNT_ID>:cluster/enterprise-cloud-platform-dev"
+
+# From the platform repo's terraform/backend-setup outputs
+tfstate_bucket_arn     = "arn:aws:s3:::enterprise-cloud-platform-tfstate-<ACCOUNT_ID>"
+tfstate_lock_table_arn = "arn:aws:dynamodb:us-east-1:<ACCOUNT_ID>:table/enterprise-cloud-platform-tf-locks"
+
+# Only needed if Jenkins deploys are enabled
+jenkins_instance_role_arn = "arn:aws:iam::<ACCOUNT_ID>:role/jenkins-controller-role"
