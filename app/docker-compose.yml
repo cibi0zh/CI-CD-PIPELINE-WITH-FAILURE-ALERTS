@@ -1,0 +1,12 @@
+# Local dev/testing only - not used in the pipeline itself, which builds and
+# pushes straight to ECR. Useful for smoke-testing the container locally
+# before it ever hits CI.
+services:
+  healthcheck:
+    build:
+      context: .
+      args:
+        BUILD_VERSION: local
+        GIT_COMMIT: local
+    ports:
+      - "8080:8080"
