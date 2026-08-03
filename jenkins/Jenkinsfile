@@ -1,0 +1,165 @@
+// =============================================================================
+// Secure CI/CD pipeline: build -> test -> scan -> containerize -> deploy,
+// with a manual approval gate before production and automatic rollback +
+// Slack alerting if the post-deploy health check fails.
+//
+// Credentials: no static AWS keys anywhere in this file or in Jenkins
+// credential store. The controller assumes terraform/oidc's
+// jenkins_deploy_role via its EC2 instance profile at runtime.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    environment {
+        AWS_REGION       = 'us-east-1'
+        ECR_REPOSITORY   = 'cicd-pipeline/healthcheck'
+        EKS_CLUSTER_DEV  = 'enterprise-cloud-platform-dev'
+        EKS_CLUSTER_PROD = 'enterprise-cloud-platform-prod'
+        IMAGE_TAG        = "${env.GIT_COMMIT.take(7)}"
+        SLACK_WEBHOOK_URL = credentials('slack-webhook-url')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build') {
+            steps {
+                dir('app') {
+                    sh '''
+                        python3 -m venv .venv
+                        . .venv/bin/activate
+                        pip install --quiet -r requirements-dev.txt
+                    '''
+                }
+            }
+        }
+
+        stage('Test') {
+            steps {
+                dir('app') {
+                    sh '''
+                        . .venv/bin/activate
+                        pytest --junitxml=test-results.xml
+                    '''
+                }
+            }
+            post {
+                always {
+                    junit 'app/test-results.xml'
+                }
+            }
+        }
+
+        stage('Containerize') {
+            steps {
+                sh """
+                    docker build \
+                      --build-arg BUILD_VERSION=${IMAGE_TAG} \
+                      --build-arg GIT_COMMIT=${env.GIT_COMMIT} \
+                      -t \$ECR_REGISTRY_URI/\$ECR_REPOSITORY:${IMAGE_TAG} \
+                      app/
+                """
+            }
+        }
+
+        stage('Scan - Trivy (image)') {
+            steps {
+                sh """
+                    trivy image --config .trivy.yaml \
+                      --exit-code 1 \
+                      \$ECR_REGISTRY_URI/\$ECR_REPOSITORY:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Scan - tfsec (infrastructure)') {
+            steps {
+                sh 'tfsec terraform/ --config-file .tfsec.yml'
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                sh """
+                    aws ecr get-login-password --region \$AWS_REGION \
+                      | docker login --username AWS --password-stdin \$ECR_REGISTRY_URI
+                    docker push \$ECR_REGISTRY_URI/\$ECR_REPOSITORY:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Deploy to dev') {
+            steps {
+                sh "./scripts/deploy_to_eks.sh \$EKS_CLUSTER_DEV app \$ECR_REGISTRY_URI/\$ECR_REPOSITORY:${IMAGE_TAG}"
+            }
+        }
+
+        stage('Health check - dev') {
+            steps {
+                script {
+                    def healthy = sh(script: './scripts/health_check.sh https://dev.app.example.com 120', returnStatus: true) == 0
+                    if (!healthy) {
+                        sh './scripts/rollback.sh app healthcheck'
+                        sh 'python3 scripts/slack_notify.py --status failure --stage deploy-dev --message "Dev deploy failed health check, rolled back automatically" --build-url $BUILD_URL'
+                        error('Dev health check failed, rolled back.')
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Staged approval: production deploy requires a human to click
+        // "Proceed" in the Jenkins UI. Times out after 24h so a stalled
+        // release doesn't block the pipeline indefinitely.
+        // ---------------------------------------------------------------
+        stage('Approve production deploy') {
+            when { branch 'main' }
+            steps {
+                timeout(time: 24, unit: 'HOURS') {
+                    input message: "Deploy ${IMAGE_TAG} to production?", ok: 'Deploy'
+                }
+            }
+        }
+
+        stage('Deploy to prod') {
+            when { branch 'main' }
+            steps {
+                sh "./scripts/deploy_to_eks.sh \$EKS_CLUSTER_PROD app \$ECR_REGISTRY_URI/\$ECR_REPOSITORY:${IMAGE_TAG}"
+            }
+        }
+
+        stage('Health check - prod') {
+            when { branch 'main' }
+            steps {
+                script {
+                    def healthy = sh(script: './scripts/health_check.sh https://app.example.com 120', returnStatus: true) == 0
+                    if (!healthy) {
+                        sh './scripts/rollback.sh app healthcheck'
+                        sh 'python3 scripts/slack_notify.py --status failure --stage deploy-prod --message "Production deploy failed health check, rolled back automatically" --build-url $BUILD_URL'
+                        error('Prod health check failed, rolled back.')
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            sh 'python3 scripts/slack_notify.py --status success --stage pipeline --message "Pipeline completed successfully for commit ' + "${env.GIT_COMMIT.take(7)}" + '" --build-url $BUILD_URL'
+        }
+        failure {
+            sh 'python3 scripts/slack_notify.py --status failure --stage pipeline --message "Pipeline failed" --build-url $BUILD_URL'
+        }
+    }
+}
