@@ -1,0 +1,11 @@
+# Trivy scan configuration used by both the GitHub Actions and Jenkins
+# pipelines so local and CI scans behave identically.
+severity:
+  - CRITICAL
+  - HIGH
+exit-code: 1
+ignore-unfixed: true
+scanners:
+  - vuln
+  - secret
+  - misconfig

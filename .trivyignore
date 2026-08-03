@@ -1,0 +1,5 @@
+# Vulnerabilities acknowledged and accepted for this project, with a reason
+# and a review date so they don't get forgotten. Trivy still fails the build
+# on any CRITICAL finding not listed here (see .github/workflows/ci-cd.yml).
+#
+# Format: CVE-ID  # reason, review-by date
