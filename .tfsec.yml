@@ -1,13 +1,6 @@
-# tfsec configuration - runs against terraform/ in CI as a required check.
-# Findings at or above "CRITICAL" fail the build and block the merge (see
-# .github/workflows/ci-cd.yml and jenkins/Jenkinsfile).
 minimum_severity: MEDIUM
 
 exclude:
-  # Wildcard resource on ecr:GetAuthorizationToken is required by the ECR
-  # API itself - AWS does not support scoping this action to a single
-  # repository ARN.
-  - aws-iam-no-policy-wildcards
 
 severity_overrides:
   aws-ecr-repository-customer-key: LOW
